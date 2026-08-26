@@ -16,7 +16,7 @@ jobs:
             -fobjc-arc \
             -I./fishhook \
             -o SpeedHack.dylib \
-            SpeedHack.c fishhook/fishhook.c \
+            SpeedHack.m fishhook/fishhook.c \
             -framework UIKit -framework Foundation
       - uses: actions/upload-artifact@v4
         with:

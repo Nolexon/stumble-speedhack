@@ -9,22 +9,25 @@ jobs:
       - name: Clone Dobby
         run: git clone https://github.com/jmpews/Dobby.git
 
-      - name: Clone fishhook (optional, not used)
-        run: git clone https://github.com/facebook/fishhook.git
-
       - name: Compile dylib
         run: |
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK Path: $SDK_PATH"
+          
           clang -arch arm64 \
-            -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+            -isysroot "$SDK_PATH" \
             -miphoneos-version-min=13.0 \
             -dynamiclib \
             -fobjc-arc \
+            -fPIC \
             -o SpeedHack.dylib \
             SpeedHack.c \
-            Dobby/source/*.c \
+            Dobby/source/core.c \
+            Dobby/source/elf.c \
+            Dobby/source/memory.c \
             -I Dobby/include \
-            -I./fishhook \
-            -framework UIKit -framework Foundation
+            -framework UIKit \
+            -framework Foundation
 
       - uses: actions/upload-artifact@v4
         with:

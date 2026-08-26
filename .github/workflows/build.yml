@@ -1,34 +1,24 @@
-name: Build SpeedHack Dylib
+name: Build Dylib
 on: push
 jobs:
   build:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Clone Dobby
         run: git clone https://github.com/jmpews/Dobby.git
-
       - name: Compile dylib
         run: |
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          echo "SDK Path: $SDK_PATH"
-          
           clang -arch arm64 \
-            -isysroot "$SDK_PATH" \
+            -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
             -miphoneos-version-min=13.0 \
             -dynamiclib \
             -fobjc-arc \
-            -fPIC \
             -o SpeedHack.dylib \
             SpeedHack.c \
-            Dobby/source/core.c \
-            Dobby/source/elf.c \
-            Dobby/source/memory.c \
+            Dobby/source/*.c \
             -I Dobby/include \
-            -framework UIKit \
-            -framework Foundation
-
+            -framework UIKit -framework Foundation
       - uses: actions/upload-artifact@v4
         with:
           name: SpeedHackDylib

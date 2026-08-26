@@ -12,6 +12,7 @@ jobs:
           clang -arch arm64 \
             -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
             -miphoneos-version-min=13.0 \
+            -I./fishhook \
             -dynamiclib \
             -o SpeedHack.dylib \
             SpeedHack.c fishhook/fishhook.c \

@@ -1,22 +1,27 @@
-name: Build Dylib
+name: Build SpeedHack Dylib
 on: push
 jobs:
   build:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Clone fishhook
-        run: git clone https://github.com/facebook/fishhook.git
+
+      - name: Clone Dobby
+        run: git clone https://github.com/jmpews/Dobby.git
+
       - name: Compile dylib
         run: |
           clang -arch arm64 \
             -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
             -miphoneos-version-min=13.0 \
-            -I./fishhook \
             -dynamiclib \
+            -fobjc-arc \
             -o SpeedHack.dylib \
-            SpeedHack.c fishhook/fishhook.c \
-            -framework Foundation
+            SpeedHack.c \
+            Dobby/source/*.c \
+            -I Dobby/include \
+            -framework UIKit -framework Foundation
+
       - uses: actions/upload-artifact@v4
         with:
           name: SpeedHackDylib

@@ -93,3 +93,5 @@ static void init(void) {
         install_inline_hook(cooldown_addr, (void *)hooked_update_cooldown, &orig_update_cooldown, &trampoline_update_cooldown);
     }
 }
+
+//KHI MADE THIS//

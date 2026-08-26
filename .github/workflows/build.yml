@@ -5,8 +5,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Clone Dobby
         run: git clone https://github.com/jmpews/Dobby.git
+
       - name: Compile dylib
         run: |
           clang -arch arm64 \
@@ -19,6 +21,7 @@ jobs:
             $(find Dobby/source -name "*.c") \
             -I Dobby/include \
             -framework UIKit -framework Foundation
+
       - uses: actions/upload-artifact@v4
         with:
           name: SpeedHackDylib

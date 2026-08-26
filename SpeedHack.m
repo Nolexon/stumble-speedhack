@@ -18,19 +18,16 @@ static void *trampoline_update_cooldown = NULL;
 
 static uintptr_t unityFrameworkBase = 0;
 
-// Speed hook: force targetSpeed
 void hooked_set_timeScale(float value) {
     if (orig_set_timeScale) {
         orig_set_timeScale(targetSpeed);
     }
 }
 
-// No cooldown hook: forceReset = true
 void hooked_update_cooldown(void *instance, uint64_t datetime, bool forceReset) {
     ((void (*)(void *, uint64_t, bool))trampoline_update_cooldown)(instance, datetime, true);
 }
 
-// Find UnityFramework or main executable base
 uintptr_t get_unity_framework_base(void) {
     uint32_t count = _dyld_image_count();
     for (uint32_t i = 0; i < count; i++) {
@@ -44,8 +41,6 @@ uintptr_t get_unity_framework_base(void) {
     return 0;
 }
 
-// Simple ARM64 inline hook: patches first instruction with branch to hook
-// Returns trampoline that executes original first 16 bytes then branches back.
 void install_inline_hook(void *target, void *hook, void **orig, void **tramp) {
     if (!target || !hook) return;
 
@@ -75,13 +70,12 @@ void install_inline_hook(void *target, void *hook, void **orig, void **tramp) {
 
     vm_protect(mach_task_self(), (vm_address_t)target, 16, 0, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
     *(uint32_t *)target = branch_inst;
-    __builtin___clear_cache((char *)target, (char *)target + 16);
+    // Cache flush omitted
     vm_protect(mach_task_self(), (vm_address_t)target, 16, 0, VM_PROT_READ | VM_PROT_EXECUTE);
 
     *orig = target;
 }
 
-// Popup
 void showStatusPopup(NSString *message) {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *keyWindow = nil;
@@ -110,29 +104,24 @@ void showStatusPopup(NSString *message) {
     });
 }
 
-// Initialization
 __attribute__((constructor))
 static void init(void) {
-    // Delay until game is loaded
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         unityFrameworkBase = get_unity_framework_base();
 
         BOOL speedHookOK = NO;
         BOOL cooldownHookOK = NO;
 
-        // Hook Time.timeScale setter at RVA 0x54AFB64
         if (unityFrameworkBase) {
             void *setterAddr = (void *)(unityFrameworkBase + TIME_SCALE_SETTER_RVA);
             install_inline_hook(setterAddr, (void *)hooked_set_timeScale, (void **)&orig_set_timeScale, (void **)&trampoline_update_cooldown);
             if (orig_set_timeScale) speedHookOK = YES;
 
-            // Hook UpdateCooldown at RVA 0x42C967C
             void *cooldownAddr = (void *)(unityFrameworkBase + UPDATE_COOLDOWN_RVA);
             install_inline_hook(cooldownAddr, (void *)hooked_update_cooldown, &orig_update_cooldown, &trampoline_update_cooldown);
             if (trampoline_update_cooldown) cooldownHookOK = YES;
         }
 
-        // Popup with status
         NSString *status = [NSString stringWithFormat:
             @"Speed hook: %@\nCooldown hook: %@",
             speedHookOK ? @"YES" : @"NO",

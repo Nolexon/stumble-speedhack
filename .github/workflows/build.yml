@@ -9,6 +9,9 @@ jobs:
       - name: Clone Dobby
         run: git clone https://github.com/jmpews/Dobby.git
 
+      - name: Clone fishhook (optional, not used)
+        run: git clone https://github.com/facebook/fishhook.git
+
       - name: Compile dylib
         run: |
           clang -arch arm64 \
@@ -20,6 +23,7 @@ jobs:
             SpeedHack.c \
             Dobby/source/*.c \
             -I Dobby/include \
+            -I./fishhook \
             -framework UIKit -framework Foundation
 
       - uses: actions/upload-artifact@v4

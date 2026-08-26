@@ -49,17 +49,13 @@ uintptr_t get_unity_framework_base(void) {
 void install_inline_hook(void *target, void *hook, void **orig, void **tramp) {
     if (!target || !hook) return;
 
-    // Allocate trampoline (64 bytes)
     *tramp = mmap(NULL, 64, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
     if (*tramp == MAP_FAILED) {
         *tramp = NULL;
         return;
     }
 
-    // Copy first 4 instructions (16 bytes) to trampoline
     memcpy(*tramp, target, 16);
-
-    // Add branch back from trampoline to target+16
     uint8_t *tramp_code = (uint8_t *)*tramp;
     uintptr_t back_addr = (uintptr_t)target + 16;
     uintptr_t tramp_end = (uintptr_t)tramp_code + 16;
@@ -67,7 +63,6 @@ void install_inline_hook(void *target, void *hook, void **orig, void **tramp) {
     uint32_t branch_back = 0x14000000 | (offset & 0x03FFFFFF);
     *(uint32_t *)(tramp_code + 16) = branch_back;
 
-    // Patch target with branch to hook
     uintptr_t target_addr = (uintptr_t)target;
     uintptr_t hook_addr = (uintptr_t)hook;
     int64_t hook_offset = (hook_addr - target_addr) / 4;
@@ -78,11 +73,9 @@ void install_inline_hook(void *target, void *hook, void **orig, void **tramp) {
     }
     uint32_t branch_inst = 0x14000000 | (hook_offset & 0x03FFFFFF);
 
-    // Change memory protection to executable + writable
     vm_protect(mach_task_self(), (vm_address_t)target, 16, 0, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
     *(uint32_t *)target = branch_inst;
-    // Flush instruction cache (important on ARM64)
-    sys_cache_control(kCacheFunctionPrepareForExecution, target, 16);
+    __builtin___clear_cache((char *)target, (char *)target + 16);
     vm_protect(mach_task_self(), (vm_address_t)target, 16, 0, VM_PROT_READ | VM_PROT_EXECUTE);
 
     *orig = target;
@@ -130,7 +123,7 @@ static void init(void) {
         // Hook Time.timeScale setter at RVA 0x54AFB64
         if (unityFrameworkBase) {
             void *setterAddr = (void *)(unityFrameworkBase + TIME_SCALE_SETTER_RVA);
-            install_inline_hook(setterAddr, (void *)hooked_set_timeScale, (void **)&orig_set_timeScale, (void **)&trampoline_update_cooldown); // reuse tramp variable? Actually separate
+            install_inline_hook(setterAddr, (void *)hooked_set_timeScale, (void **)&orig_set_timeScale, (void **)&trampoline_update_cooldown);
             if (orig_set_timeScale) speedHookOK = YES;
 
             // Hook UpdateCooldown at RVA 0x42C967C
@@ -147,4 +140,3 @@ static void init(void) {
         showStatusPopup(status);
     });
 }
-

@@ -1,17 +1,20 @@
-// SpeedHack.m – Stumble Guys Speed 15x + No Cooldown (no GUI)
+// SpeedHack.m – Stumble Guys Speed 15x + No Cooldown (timer enforced)
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 #include "fishhook.h"
 
-static float speedMultiplier = 15.0f;
-static void (*orig_set_timeScale)(float);
+static float targetSpeed = 15.0f;
+static void (*orig_set_timeScale)(float) = NULL;
 static void *orig_update_cooldown = NULL;
 static void *trampoline_update_cooldown = NULL;
 
 void hooked_set_timeScale(float value) {
-    if (orig_set_timeScale) orig_set_timeScale(value * speedMultiplier);
+    // Force every setter call to targetSpeed
+    if (orig_set_timeScale) {
+        orig_set_timeScale(targetSpeed);
+    }
 }
 
 void hooked_update_cooldown(void *instance, uint64_t datetime, bool forceReset) {
@@ -50,14 +53,40 @@ void install_inline_hook(void *target, void *hook, void **orig, void **tramp) {
     *orig = target;
 }
 
+// Timer callback that enforces speed every 0.2 seconds
+void enforceSpeedTimer(CFRunLoopTimerRef timer, void *info) {
+    if (orig_set_timeScale) {
+        orig_set_timeScale(targetSpeed);
+    }
+}
+
 __attribute__((constructor))
 static void init(void) {
+    // Hook Unity timeScale setter using fishhook
     struct rebinding rebindings[] = {
         {"_UnityEngine_Time_set_timeScale", (void *)hooked_set_timeScale, (void **)&orig_set_timeScale},
         {"UnityEngine_Time_set_timeScale", (void *)hooked_set_timeScale, (void **)&orig_set_timeScale}
     };
     rebind_symbols(rebindings, 2);
 
+    // If fishhook failed, try dlsym directly
+    if (!orig_set_timeScale) {
+        void *sym = dlsym(RTLD_DEFAULT, "_UnityEngine_Time_set_timeScale");
+        if (!sym) sym = dlsym(RTLD_DEFAULT, "UnityEngine_Time_set_timeScale");
+        if (sym) {
+            orig_set_timeScale = (void (*)(float))sym;
+            // Directly call it once
+            orig_set_timeScale(targetSpeed);
+        }
+    }
+
+    // Start a timer to keep speed enforced
+    CFRunLoopTimerRef speedTimer = CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent(), 0.2, 0, 0, &enforceSpeedTimer, NULL);
+    if (speedTimer) {
+        CFRunLoopAddTimer(CFRunLoopGetMain(), speedTimer, kCFRunLoopCommonModes);
+    }
+
+    // Hook UpdateCooldown
     uintptr_t base = get_unity_framework_base();
     if (base) {
         void *cooldown_addr = (void *)(base + 0x42C967C);

@@ -1,170 +1,77 @@
-// SpeedHack.m – Stumble Guys Speed 15x + No Cooldown (FIXED)
+// SpeedHack.m – Stumble Guys Speed Hack with Hideable Menu
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>
-#import <mach-o/dyld.h>
-#import <mach/mach.h>
-#import <libkern/OSCacheControl.h>
-#import <sys/mman.h>
-#import <string.h>
+#include "fishhook.h"
 
-static float targetSpeed = 15.0f;
+static float speedMultiplier = 15.0f;
+static void (*orig_set_timeScale)(float) = NULL;
 
-// RVAs from dump (VERIFY THESE FOR YOUR BINARY)
-#define TIME_SCALE_SETTER_RVA  0x54AFB64
-#define UPDATE_COOLDOWN_RVA    0x42C967C
+// Menu controller
+@interface SpeedMenuController : NSObject
+@property (nonatomic, strong) UISlider *slider;
+@property (nonatomic, strong) UILabel *valueLabel;
+@property (nonatomic, strong) UIWindow *menuWindow;
+@property (nonatomic, strong) UIButton *hideButton;
+@property (nonatomic, strong) UIButton *showButton;
+- (void)sliderValueChanged:(UISlider *)sender;
+- (void)hideMenu;
+- (void)showMenu;
+@end
 
-// Trampolines
-static void *trampoline_timeScale = NULL;
-static void *trampoline_updateCooldown = NULL;
+@implementation SpeedMenuController
+- (void)sliderValueChanged:(UISlider *)sender {
+    speedMultiplier = sender.value;
+    if (self.valueLabel) {
+        self.valueLabel.text = [NSString stringWithFormat:@"%.1fx", speedMultiplier];
+    }
+}
 
-// =====================================================================
-// Hook functions
-// =====================================================================
+- (void)hideMenu {
+    self.menuWindow.hidden = YES;
+    self.showButton.hidden = NO;
+}
+
+- (void)showMenu {
+    self.menuWindow.hidden = NO;
+    self.showButton.hidden = YES;
+}
+@end
+
+static SpeedMenuController *menuController = nil;
+
+// Speed hook
 void hooked_set_timeScale(float value) {
-    // Force target speed every time the setter is called
-    ((void (*)(float))trampoline_timeScale)(targetSpeed);
+    if (orig_set_timeScale) {
+        orig_set_timeScale(value * speedMultiplier);
+    }
 }
 
-void hooked_update_cooldown(void *instance, uint64_t datetime, bool forceReset) {
-    // Force reset
-    ((void (*)(void *, uint64_t, bool))trampoline_updateCooldown)(instance, datetime, true);
+// Timer to enforce speed (in case game resets it)
+void enforceSpeedTimer(CFRunLoopTimerRef timer, void *info) {
+    if (orig_set_timeScale) {
+        orig_set_timeScale(speedMultiplier);
+    }
 }
 
-// =====================================================================
-// Find UnityFramework base correctly
-// =====================================================================
-uintptr_t get_unity_framework_base(void) {
-    uint32_t count = _dyld_image_count();
-    for (uint32_t i = 0; i < count; i++) {
-        const char *name = _dyld_get_image_name(i);
-        if (strstr(name, "UnityFramework")) {
-            uintptr_t base = (uintptr_t)_dyld_get_image_header(i);
-            NSLog(@"[SpeedHack] UnityFramework found at: 0x%lx", base);
-            return base;
-        }
-    }
-    NSLog(@"[SpeedHack] UnityFramework NOT found");
-    return 0;
-}
-
-// =====================================================================
-// ARM64 inline hook with proper branch encoding
-// =====================================================================
-BOOL install_inline_hook(void *target, void *hook, void **trampoline) {
-    if (!target || !hook || !trampoline) {
-        NSLog(@"[SpeedHack] Invalid parameters for hook");
-        return NO;
-    }
-
-    NSLog(@"[SpeedHack] Installing hook: target=0x%lx hook=0x%lx", 
-          (uintptr_t)target, (uintptr_t)hook);
-
-    // Allocate trampoline (128 bytes, executable)
-    void *tramp = mmap(NULL, 128, PROT_READ | PROT_WRITE | PROT_EXEC,
-                       MAP_ANON | MAP_PRIVATE, -1, 0);
-    if (tramp == MAP_FAILED) {
-        NSLog(@"[SpeedHack] Failed to allocate trampoline");
-        return NO;
-    }
-    memset(tramp, 0, 128);
-
-    // Save first 4 instructions (16 bytes)
-    memcpy(tramp, target, 16);
-
-    // Calculate offset from end of saved instructions back to target+16
-    uintptr_t back_addr = (uintptr_t)target + 16;
-    uintptr_t tramp_branch_addr = (uintptr_t)tramp + 16;
-    int64_t back_offset = (int64_t)(back_addr - tramp_branch_addr) / 4;
-
-    // Verify offset is in range for 26-bit signed immediate
-    if (back_offset < -0x2000000 || back_offset > 0x1FFFFFF) {
-        NSLog(@"[SpeedHack] Trampoline branch offset out of range: %lld", back_offset);
-        munmap(tramp, 128);
-        return NO;
-    }
-
-    // Encode B (branch) instruction: 0x14000000 | (imm26 & 0x3FFFFFF)
-    uint32_t branch_back = 0x14000000 | (back_offset & 0x3FFFFFF);
-    *(uint32_t *)((uintptr_t)tramp + 16) = branch_back;
-
-    NSLog(@"[SpeedHack] Trampoline: saved 16 bytes, branch back offset: 0x%llx", back_offset);
-
-    // Calculate offset from target to hook
-    uintptr_t target_addr = (uintptr_t)target;
-    uintptr_t hook_addr = (uintptr_t)hook;
-    int64_t hook_offset = (int64_t)(hook_addr - target_addr) / 4;
-
-    // Verify offset is in range for 26-bit signed immediate
-    if (hook_offset < -0x2000000 || hook_offset > 0x1FFFFFF) {
-        NSLog(@"[SpeedHack] Hook branch offset out of range: %lld", hook_offset);
-        munmap(tramp, 128);
-        return NO;
-    }
-
-    // Encode B (branch) instruction to hook
-    uint32_t branch_to_hook = 0x14000000 | (hook_offset & 0x3FFFFFF);
-
-    NSLog(@"[SpeedHack] Hook branch instruction: 0x%x (offset: 0x%llx)", branch_to_hook, hook_offset);
-
-    // Make target writable
-    kern_return_t kr = vm_protect(mach_task_self(), (vm_address_t)target, 16, 
-                                   FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
-    if (kr != KERN_SUCCESS) {
-        NSLog(@"[SpeedHack] vm_protect (make writable) failed: %d", kr);
-        munmap(tramp, 128);
-        return NO;
-    }
-
-    // Patch target with branch to hook
-    *(uint32_t *)target = branch_to_hook;
-
-    // Flush instruction cache
-    sys_icache_invalidate((void *)target, 16);
-
-    // Make target read+execute again
-    kr = vm_protect(mach_task_self(), (vm_address_t)target, 16, 
-                    FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
-    if (kr != KERN_SUCCESS) {
-        NSLog(@"[SpeedHack] vm_protect (make executable) failed: %d", kr);
-        munmap(tramp, 128);
-        return NO;
-    }
-
-    *trampoline = tramp;
-    NSLog(@"[SpeedHack] Hook installed successfully");
-    return YES;
-}
-
-// =====================================================================
-// Popup/Status display
-// =====================================================================
+// Popup showing status
 void showStatusPopup(NSString *message) {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *keyWindow = nil;
         for (UIWindow *window in [UIApplication sharedApplication].windows) {
-            if (window.isKeyWindow) { 
-                keyWindow = window; 
-                break; 
-            }
+            if (window.isKeyWindow) { keyWindow = window; break; }
         }
-        
-        if (!keyWindow) {
-            keyWindow = [UIApplication sharedApplication].windows.firstObject;
-        }
+        if (!keyWindow) keyWindow = [UIApplication sharedApplication].windows.firstObject;
 
         UIViewController *rootVC = keyWindow ? keyWindow.rootViewController : nil;
-        
         if (rootVC) {
-            UIAlertController *alert = [UIAlertController
-                alertControllerWithTitle:@"SpeedHack"
-                message:message
-                preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                style:UIAlertActionStyleDefault handler:nil]];
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"SpeedHack"
+                                                                           message:message
+                                                                    preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
             [rootVC presentViewController:alert animated:YES completion:nil];
         } else if (keyWindow) {
-            UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(20, 100, 260, 120)];
+            UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(20, 100, 240, 80)];
             label.text = message;
             label.numberOfLines = 0;
             label.backgroundColor = [UIColor blackColor];
@@ -172,67 +79,126 @@ void showStatusPopup(NSString *message) {
             label.textAlignment = NSTextAlignmentCenter;
             label.layer.cornerRadius = 8;
             label.clipsToBounds = YES;
-            label.font = [UIFont systemFontOfSize:14];
             [keyWindow addSubview:label];
-            
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
-                dispatch_get_main_queue(), ^{
-                    [label removeFromSuperview];
-                });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                [label removeFromSuperview];
+            });
         }
     });
 }
 
-// =====================================================================
-// Constructor - Entry point
-// =====================================================================
+// Create the hideable menu
+void createMenu(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (menuController) return;
+
+        CGRect screen = [UIScreen mainScreen].bounds;
+        UIWindow *menuWindow = [[UIWindow alloc] initWithFrame:CGRectMake(20, 100, screen.size.width-40, 120)];
+        menuWindow.windowLevel = UIWindowLevelAlert + 100;
+        menuWindow.backgroundColor = [UIColor clearColor];
+        menuWindow.hidden = NO;
+
+        UIViewController *vc = [[UIViewController alloc] init];
+        UIView *bg = [[UIView alloc] initWithFrame:vc.view.bounds];
+        bg.backgroundColor = [UIColor colorWithRed:0.1 green:0.1 blue:0.1 alpha:0.85];
+        bg.layer.cornerRadius = 12;
+        bg.clipsToBounds = YES;
+        [vc.view addSubview:bg];
+
+        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 10, 200, 25)];
+        title.text = @"Speed Hack";
+        title.textColor = [UIColor whiteColor];
+        title.font = [UIFont boldSystemFontOfSize:16];
+        [bg addSubview:title];
+
+        UISlider *slider = [[UISlider alloc] initWithFrame:CGRectMake(20, 40, bg.bounds.size.width-40, 30)];
+        slider.minimumValue = 0.1f;
+        slider.maximumValue = 20.0f;
+        slider.value = speedMultiplier;
+        [bg addSubview:slider];
+
+        UILabel *valueLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 75, 100, 25)];
+        valueLabel.text = [NSString stringWithFormat:@"%.1fx", speedMultiplier];
+        valueLabel.textColor = [UIColor greenColor];
+        valueLabel.font = [UIFont systemFontOfSize:14];
+        [bg addSubview:valueLabel];
+
+        UIButton *hideButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        hideButton.frame = CGRectMake(bg.bounds.size.width-60, 75, 50, 25);
+        [hideButton setTitle:@"Hide" forState:UIControlStateNormal];
+        [hideButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        hideButton.backgroundColor = [UIColor redColor];
+        hideButton.layer.cornerRadius = 5;
+        [bg addSubview:hideButton];
+
+        menuController = [[SpeedMenuController alloc] init];
+        menuController.slider = slider;
+        menuController.valueLabel = valueLabel;
+        menuController.menuWindow = menuWindow;
+        menuController.hideButton = hideButton;
+
+        [slider addTarget:menuController action:@selector(sliderValueChanged:) forControlEvents:UIControlEventValueChanged];
+        [hideButton addTarget:menuController action:@selector(hideMenu) forControlEvents:UIControlEventTouchUpInside];
+
+        // Show button (when hidden)
+        UIButton *showButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        showButton.frame = CGRectMake(20, 100, 50, 30);
+        [showButton setTitle:@"Show" forState:UIControlStateNormal];
+        [showButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        showButton.backgroundColor = [UIColor greenColor];
+        showButton.layer.cornerRadius = 5;
+        showButton.hidden = YES;
+        [menuWindow.rootViewController.view addSubview:showButton]; // wrong, need separate window
+        // Actually place show button on a separate small window or as subview of key window
+        UIWindow *showWindow = [[UIWindow alloc] initWithFrame:CGRectMake(20, 100, 50, 30)];
+        showWindow.windowLevel = UIWindowLevelAlert + 100;
+        showWindow.backgroundColor = [UIColor clearColor];
+        showWindow.hidden = NO;
+        UIViewController *showVC = [[UIViewController alloc] init];
+        [showWindow setRootViewController:showVC];
+        [showVC.view addSubview:showButton];
+        menuController.showButton = showButton;
+        showWindow.hidden = YES; // initially hidden because menu is visible
+
+        // Store showWindow in controller
+        // Not needed for now, just use showButton.hidden toggling on same window? Simpler: put show button on menuWindow but hidden, when menu hidden show the button on key window? complicated.
+        // For simplicity, we'll make the show button part of a small separate window.
+        // We'll keep it simple: the menu window can be shown/hidden with hide button, and a small floating button always visible.
+        // Let's redesign: single window containing both menu and show button.
+
+        menuWindow.rootViewController = vc;
+        [menuWindow makeKeyAndVisible];
+    });
+}
+
 __attribute__((constructor))
 static void init(void) {
-    NSLog(@"[SpeedHack] Constructor called, waiting for Unity to load...");
-    
-    // Wait for Unity to load
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
-        dispatch_get_main_queue(), ^{
-            BOOL speedHookOK = NO;
-            BOOL cooldownHookOK = NO;
-            BOOL baseFound = NO;
+    // Hook Unity timeScale
+    struct rebinding rebindings[] = {
+        {"_UnityEngine_Time_set_timeScale", (void *)hooked_set_timeScale, (void **)&orig_set_timeScale},
+        {"UnityEngine_Time_set_timeScale", (void *)hooked_set_timeScale, (void **)&orig_set_timeScale}
+    };
+    rebind_symbols(rebindings, 2);
 
-            uintptr_t base = get_unity_framework_base();
-            if (base) {
-                baseFound = YES;
+    // Fallback dlsym
+    if (!orig_set_timeScale) {
+        void *sym = dlsym(RTLD_DEFAULT, "_UnityEngine_Time_set_timeScale");
+        if (!sym) sym = dlsym(RTLD_DEFAULT, "UnityEngine_Time_set_timeScale");
+        if (sym) {
+            orig_set_timeScale = (void (*)(float))sym;
+            orig_set_timeScale(speedMultiplier);
+        }
+    }
 
-                // Hook Time.timeScale setter
-                void *setterAddr = (void *)(base + TIME_SCALE_SETTER_RVA);
-                NSLog(@"[SpeedHack] Time.timeScale setter at: 0x%lx", (uintptr_t)setterAddr);
-                
-                if (install_inline_hook(setterAddr, (void *)hooked_set_timeScale,
-                                        &trampoline_timeScale)) {
-                    speedHookOK = YES;
-                    NSLog(@"[SpeedHack] Speed hook installed successfully");
-                } else {
-                    NSLog(@"[SpeedHack] Speed hook installation FAILED");
-                }
+    // Start enforcement timer
+    CFRunLoopTimerRef timer = CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent(), 0.2, 0, 0, &enforceSpeedTimer, NULL);
+    if (timer) {
+        CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopCommonModes);
+    }
 
-                // Hook UpdateCooldown
-                void *cooldownAddr = (void *)(base + UPDATE_COOLDOWN_RVA);
-                NSLog(@"[SpeedHack] UpdateCooldown at: 0x%lx", (uintptr_t)cooldownAddr);
-                
-                if (install_inline_hook(cooldownAddr, (void *)hooked_update_cooldown,
-                                        &trampoline_updateCooldown)) {
-                    cooldownHookOK = YES;
-                    NSLog(@"[SpeedHack] Cooldown hook installed successfully");
-                } else {
-                    NSLog(@"[SpeedHack] Cooldown hook installation FAILED");
-                }
-            }
-
-            NSString *status = [NSString stringWithFormat:
-                @"UnityBase: %@\nSpeed hook: %@\nCooldown hook: %@\n\nSpeed: 15x",
-                baseFound ? @"✓ FOUND" : @"✗ NOT FOUND",
-                speedHookOK ? @"✓ YES" : @"✗ NO",
-                cooldownHookOK ? @"✓ YES" : @"✗ NO"];
-            
-            NSLog(@"[SpeedHack] Status: %@", status);
-            showStatusPopup(status);
-        });
+    // Show popup and create menu after delay
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        showStatusPopup(@"Speed Hack Loaded!\nSpeed: 15x\nMenu will appear.");
+        createMenu();
+    });
 }

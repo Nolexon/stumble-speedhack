@@ -1,32 +1,14 @@
-// SpeedHack.m – Stumble Guys Speed + No Cooldown (GUI fixed)
+// SpeedHack.m – Stumble Guys Speed 15x + No Cooldown (no GUI)
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 #include "fishhook.h"
 
-static float speedMultiplier = 5.0f;
+static float speedMultiplier = 15.0f;
 static void (*orig_set_timeScale)(float);
 static void *orig_update_cooldown = NULL;
 static void *trampoline_update_cooldown = NULL;
-
-@interface SliderController : NSObject
-@property (nonatomic, strong) UISlider *slider;
-@property (nonatomic, strong) UILabel *valueLabel;
-- (void)sliderValueChanged:(UISlider *)sender;
-@end
-
-@implementation SliderController
-- (void)sliderValueChanged:(UISlider *)sender {
-    speedMultiplier = sender.value;
-    if (self.valueLabel) {
-        self.valueLabel.text = [NSString stringWithFormat:@"%.1fx", speedMultiplier];
-    }
-    NSLog(@"[SpeedHack] Slider changed: %.2f", speedMultiplier);
-}
-@end
-
-static SliderController *g_sliderController = nil;
 
 void hooked_set_timeScale(float value) {
     if (orig_set_timeScale) orig_set_timeScale(value * speedMultiplier);
@@ -68,56 +50,8 @@ void install_inline_hook(void *target, void *hook, void **orig, void **tramp) {
     *orig = target;
 }
 
-void showSliderMenu(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSLog(@"[SpeedHack] showSliderMenu called");
-        if (menuWindow) return;
-
-        CGRect screen = [UIScreen mainScreen].bounds;
-        menuWindow = [[UIWindow alloc] initWithFrame:screen];
-        menuWindow.windowLevel = UIWindowLevelAlert + 100;
-        menuWindow.backgroundColor = [UIColor clearColor];
-        menuWindow.hidden = NO;
-
-        UIViewController *vc = [[UIViewController alloc] init];
-        UIView *bg = [[UIView alloc] initWithFrame:CGRectMake(20, 100, screen.size.width-40, 120)];
-        bg.backgroundColor = [UIColor colorWithRed:0.1 green:0.1 blue:0.1 alpha:0.85];
-        bg.layer.cornerRadius = 12;
-        [vc.view addSubview:bg];
-
-        UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(20, 15, 200, 30)];
-        label.text = @"Speed Multiplier";
-        label.textColor = [UIColor whiteColor];
-        label.font = [UIFont boldSystemFontOfSize:16];
-        [bg addSubview:label];
-
-        UISlider *slider = [[UISlider alloc] initWithFrame:CGRectMake(20, 50, bg.bounds.size.width-40, 30)];
-        slider.minimumValue = 0.1f;
-        slider.maximumValue = 20.0f;
-        slider.value = speedMultiplier;
-        [bg addSubview:slider];
-
-        UILabel *valueLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 85, 200, 25)];
-        valueLabel.text = [NSString stringWithFormat:@"%.1fx", speedMultiplier];
-        valueLabel.textColor = [UIColor greenColor];
-        valueLabel.font = [UIFont systemFontOfSize:14];
-        [bg addSubview:valueLabel];
-
-        g_sliderController = [[SliderController alloc] init];
-        g_sliderController.slider = slider;
-        g_sliderController.valueLabel = valueLabel;
-        [slider addTarget:g_sliderController action:@selector(sliderValueChanged:) forControlEvents:UIControlEventValueChanged];
-
-        menuWindow.rootViewController = vc;
-        [menuWindow makeKeyAndVisible];
-
-        NSLog(@"[SpeedHack] Menu window displayed");
-    });
-}
-
 __attribute__((constructor))
 static void init(void) {
-    NSLog(@"[SpeedHack] Constructor called");
     struct rebinding rebindings[] = {
         {"_UnityEngine_Time_set_timeScale", (void *)hooked_set_timeScale, (void **)&orig_set_timeScale},
         {"UnityEngine_Time_set_timeScale", (void *)hooked_set_timeScale, (void **)&orig_set_timeScale}
@@ -129,8 +63,4 @@ static void init(void) {
         void *cooldown_addr = (void *)(base + 0x42C967C);
         install_inline_hook(cooldown_addr, (void *)hooked_update_cooldown, &orig_update_cooldown, &trampoline_update_cooldown);
     }
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        showSliderMenu();
-    });
 }

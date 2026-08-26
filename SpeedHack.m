@@ -1,4 +1,4 @@
-// SpeedHack.m – Stumble Guys Speed Hack with Hideable Menu
+//khiglock made this // // SpeedHack.m – Stumble Guys Speed Hack with Hideable Menu
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>

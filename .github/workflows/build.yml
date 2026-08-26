@@ -14,6 +14,7 @@ jobs:
             -miphoneos-version-min=13.0 \
             -dynamiclib \
             -fobjc-arc \
+            -install_name @executable_path/SpeedHack.dylib \
             -I./fishhook \
             -o SpeedHack.dylib \
             SpeedHack.m fishhook/fishhook.c \

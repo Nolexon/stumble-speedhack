@@ -16,7 +16,7 @@ jobs:
             -fobjc-arc \
             -o SpeedHack.dylib \
             SpeedHack.c \
-            Dobby/source/*.c \
+            $(find Dobby/source -name "*.c") \
             -I Dobby/include \
             -framework UIKit -framework Foundation
       - uses: actions/upload-artifact@v4
